@@ -2,7 +2,7 @@
 name = "fbp"
 version.workspace = true
 edition.workspace = true
-description = "A bitmap-projected TUI library player. P0: the audio path."
+description = "A bitmap-projected TUI library player."
 
 [[bin]]
 name = "fbp"
@@ -10,12 +10,15 @@ path = "src/main.rs"
 
 [features]
 default = ["device"]
-# Audio output. Off with --no-default-features: the CLI still lists and decodes.
+# Audio output. Off with --no-default-features: the CLI still indexes, searches and decodes.
 device = ["fbp-audio/device"]
 
 [dependencies]
 fbp-core = { path = "../fbp-core" }
 fbp-audio = { path = "../fbp-audio", default-features = false }
-# Only its crossterm re-export so far; the cell grid itself is P1.
+fbp-index = { path = "../fbp-index" }
+# Only its crossterm re-export so far; the cell grid itself is P1b.
 ratatui = "0.30"
 walkdir = "2"
+dirs = "5"
+libc = "0.2"

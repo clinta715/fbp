@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fbp-core", "crates/fbp-audio", "crates/fbp"]
+members = ["crates/fbp-core", "crates/fbp-audio", "crates/fbp-index", "crates/fbp"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,10 +1,13 @@
 # fbp — scope
 
-**Status:** scope doc, draft 2 (decisions folded in).
+**Status:** scope doc, draft 3 (P0 and P1a landed — see §10).
 **Working name:** `fbp` (foobar, projected — rename freely).
 **Reference implementation for the UI spine:** `/mnt/nvme2/build/htrk3` (DESIGN §UI strategy).
 **Target library:** `~/Music` → `/mnt/md0/mp3`: **115,577 files**, 99,329 mp3, 671 opus, 1,654 m3u,
 363 cue, 5,471 cover images. Every budget below is set against that number.
+
+**Landed:** P0 the audio path, P1a the index (schema, incremental scanner, tags, FTS). The panel
+tree, the layout engine and cover art are P1b.
 
 **Decided (draft 2):**
 - **Linux only.** cpal stays portable as a side effect; macOS/Windows are untested, not targets.
@@ -175,11 +178,27 @@ peaks(track_id, cols BLOB)     -- waveform, lazy, ~64 B/track
 meta(key, value)               -- schema version, roots, last scan
 ```
 
-**Scan.** `(size, mtime, inode)` change detection, not hashing: 115k stats is ~2 s warm, hashing is
-minutes. Removals via a `seen` stamp per scan. Duration from the container/tag, not from decoding
-(a decode-per-file scan is 40+ minutes); undecidable files are decoded once, lazily. Background job
-with a `(scanned, total, current_path, errors)` contract in the status bar: cancellable, resumable,
-never blocking input.
+**Measured on the real library** (`/mnt/md0/mp3`, a RAID1 of two spinning ST2000DM001s, 31 GB RAM):
+
+| | |
+|---|---|
+| indexed | **100,640 files** → 18,181 albums, 11,931 artists, 447 d 20 h of audio, 1,061 GiB |
+| database | 78 MB (WAL) |
+| **warm rescan** (nothing changed) | **0.5–0.7 s** — the budget was < 5 s |
+| cold tag read | **~23 ms/file** (a seek per file on this array) → a first-ever full scan ≈ 40 min serial |
+| 8 readers, 26,912 cold files | 265 s (~**2.3×** serial; the disks are the limit, not the CPU) |
+| FTS query | **3–21 ms** including process start and DB open |
+| unparseable files | 102 → rows in `errors`, shown as "unreadable", never silently absent |
+
+**Scan, as built (P1a).** One walk (directory entries only, no `stat`), one bulk `SELECT` of the
+root's rows into memory, a metadata pass, then tag reads only for files whose
+`(size, mtime, inode)` changed — not hashing: a full metadata pass over 99k files is 1.9 s. Eight
+parallel readers, one writer batching 512 rows per transaction, removals computed in memory from the
+paths seen, and a `(scanned, total, current_path, errors)` progress contract that is cancellable and
+never blocks input. Duration comes from the container/tag, not from decoding. Cover art is **not**
+parsed (`read_cover_art(false)`): art is a per-album lazy fetch, so indexing never pulls ~20 GB of
+JPEGs through a spinning disk to fill a table. `errors` is keyed by path, so a warm rescan keeps
+reporting a broken file until it is read again and works.
 
 **Art.** Content-hashed and deduped (5,471 images for far fewer distinct covers — `folder.jpg` repeats
 per rip). Priority: embedded > `cover/front/folder.jpg` in the album dir > heuristic filename. Thumbs
@@ -322,12 +341,20 @@ audio files) takes **465 ms** in a debug build; all 13 tests pass with and witho
 `mp3_encoder_delay_is_trimmed` (the trim flag is on) and `mp3_tracks_join_without_silence`
 (no silent block at the seam).
 
-**P1 — the library.** SQLite + scanner + tags + art cache + FTS; layout engine v0 (fixed default tree,
-resizable, persisted); tree/table/albums/playlist/nowplaying panels; views + quick filter; playlists;
-m3u import; cue import; ratings/counters; session restore; CLI + MCP; shots.
-*Accept:* 115k-file scan completes with input latency p99 < 50 ms *during* the scan; a no-change rescan
-< 5 s; filter keystroke → repaint on the full table < 16 ms; a 200×60 shot of the `albums` panel shows
-real cover art; restart restores workspace, layout, view and scroll exactly.
+**P1a — the index (landed 2026-10-29).** SQLite schema + migrations (v2), the incremental scanner
+(parallel readers, single writer, one bulk diff, in-memory removal detection), `lofty` tags without
+cover art, FTS5 search, album/artist rollups, stats, and the `scan`/`search`/`stats`/`play` verbs on
+top of them. 24 tests, including a serial-vs-parallel determinism check. Numbers are in §5: a warm
+rescan of 100,640 files is **0.5 s** (budget < 5 s), FTS is 3–21 ms, and the real library's 102
+unparseable files are visible error rows.
+
+**P1b — the library you can look at.** Layout engine v0 (fixed default tree, resizable, persisted;
+panel/tabs/split); panels tree/table/albums/playlist/nowplaying/console; saved views + quick filter;
+playlists; m3u and cue import; ratings/counters; session restore; art cache with half-block projection;
+`shots`; MCP.
+*Accept:* filter keystroke → repaint on the full table < 16 ms; a 200×60 shot of the `albums` panel
+shows real cover art; the default layout restores exactly after a restart; a scan runs while the table
+scrolls with p99 input latency < 50 ms.
 
 **P2 — library management (the weight centre).** Tag write; file ops (move/rename/organize, dry-run,
 undo journal); missing-file relocate; duplicate finder; query language + autoplaylists; ReplayGain
@@ -348,17 +375,18 @@ offscreen pin paints bands and a snapped playhead; idle CPU < 5 % of a core at 2
 
 Budget table (release build, the real 115k library):
 
-| Metric | Target |
-|---|---|
-| cold start → interactive (warm DB) | < 150 ms |
-| warm rescan (stat only) | < 5 s |
-| key → repaint | < 16 ms |
-| filter over 100k rows | < 16 ms/keystroke |
-| seek → audible | < 100 ms |
-| track → track (gapless) | 0 samples |
-| RSS with 100k tracks + art | < 300 MB |
-| idle CPU (playing, terminal) | < 2 % |
-| overlay frame (window, 20 fps) | < 5 % of a core |
+| Metric | Target | Measured |
+|---|---|---|
+| cold start → interactive (warm DB) | < 150 ms | — |
+| warm rescan (stat only) | < 5 s | **0.5–0.7 s** (P1a) |
+| first-ever scan of 100k files | — | ~40 min serial, ~17 min with 8 readers (this RAID1) |
+| key → repaint | < 16 ms | — |
+| filter over 100k rows | < 16 ms/keystroke | **3–21 ms** incl. process start (P1a) |
+| seek → audible | < 100 ms | — |
+| track → track (gapless) | 0 samples | **0** (P0) |
+| RSS with 100k tracks + art | < 300 MB | — |
+| idle CPU (playing, terminal) | < 2 % | — |
+| overlay frame (window, 20 fps) | < 5 % of a core | — |
 
 ---
 
@@ -405,7 +433,9 @@ Budget table (release build, the real 115k library):
    because it is only a DB row.
 3. **Library correctness is unglamorous and endless**: albumartist fallbacks, compilations, multi-disc,
    disc totals, unicode normalisation, cue offsets, art priority. Budget real time; the fixture library
-   is the tool that keeps it honest.
+   is the tool that keeps it honest. *First taste in P1a: 102 of 100,640 real files fail to parse, the
+   error list was wiped by the first warm rescan (now keyed by path), and \"albumartist else artist\" is a
+   grouping rule that the real data already leans on.*
 4. **Art in terminals is a compatibility swamp** (kitty detection, sixel, tmux passthrough, truecolor).
    Half-blocks are the floor and always work; everything else is a toggle with a visible fallback.
 5. **Two front-ends drift.** Mitigated only by invariant 3 (one input path, one tick, one render); the

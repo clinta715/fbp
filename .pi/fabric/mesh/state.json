@@ -17,12 +17,12 @@
         "model": "commandcode/deepseek/deepseek-v4.1-flash",
         "thinking": "high",
         "startedAt": 1793280486393,
-        "updatedAt": 1793283402664,
+        "updatedAt": 1793287991895,
         "pendingMessages": false,
         "local": false
       },
-      "version": 778,
-      "updatedAt": 1793283402664,
+      "version": 1843,
+      "updatedAt": 1793287991895,
       "updatedBy": {
         "id": "session:01a187d6-f5b6-73b8-b6e1-2b904c99af12",
         "name": "main",
@@ -53,14 +53,14 @@
         "model": "commandcode/deepseek/deepseek-v4.1-flash",
         "thinking": "high",
         "startedAt": 1793280486393,
-        "updatedAt": 1793283402664,
+        "updatedAt": 1793287991895,
         "pendingMessages": false,
         "controlProtocol": "v1",
         "ownerIncarnation": "4be4baa6-9481-4609-89e6-57b614c4e1a0",
         "label": "FBP-1"
       },
-      "version": 779,
-      "updatedAt": 1793283402665,
+      "version": 1844,
+      "updatedAt": 1793287991896,
       "updatedBy": {
         "id": "session:01a187d6-f5b6-73b8-b6e1-2b904c99af12",
         "name": "main",
@@ -81,11 +81,11 @@
           "sessionId": "01a187d6-f5b6-73b8-b6e1-2b904c99af12"
         },
         "startedAt": 1793280486394,
-        "updatedAt": 1793283402665,
-        "expiresAt": 1793283417665
+        "updatedAt": 1793287991896,
+        "expiresAt": 1793288006896
       },
-      "version": 780,
-      "updatedAt": 1793283402665,
+      "version": 1845,
+      "updatedAt": 1793287991897,
       "updatedBy": {
         "id": "session:01a187d6-f5b6-73b8-b6e1-2b904c99af12",
         "name": "main",
@@ -109,11 +109,11 @@
       }
     }
   },
-  "highWater": 2335,
+  "highWater": 5530,
   "versions": {
-    "sessions/01a187d6-f5b6-73b8-b6e1-2b904c99af12": 778,
-    "topology/participants/67dbcbe293fed2ef783957ac3f094aa01f3caa15ff2d7bb841293b9b113ad27e": 779,
-    "topology/hosts/67dbcbe293fed2ef783957ac3f094aa01f3caa15ff2d7bb841293b9b113ad27e": 780,
+    "sessions/01a187d6-f5b6-73b8-b6e1-2b904c99af12": 1843,
+    "topology/participants/67dbcbe293fed2ef783957ac3f094aa01f3caa15ff2d7bb841293b9b113ad27e": 1844,
+    "topology/hosts/67dbcbe293fed2ef783957ac3f094aa01f3caa15ff2d7bb841293b9b113ad27e": 1845,
     "topology/peer-seq/3": 4
   },
   "tombstoneOrder": []

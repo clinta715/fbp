@@ -1,0 +1,11 @@
+[package]
+name = "fbp-index"
+version.workspace = true
+edition.workspace = true
+description = "The library index: SQLite schema, incremental scanner, tags, FTS."
+
+[dependencies]
+fbp-core = { path = "../fbp-core" }
+rusqlite = { version = "0.41", features = ["bundled"] }
+lofty = "0.25"
+walkdir = "2"
