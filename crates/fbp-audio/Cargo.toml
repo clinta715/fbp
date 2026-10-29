@@ -1,0 +1,19 @@
+[package]
+name = "fbp-audio"
+version.workspace = true
+edition.workspace = true
+description = "Decode, resample, and the gapless producer/callback pair."
+
+[features]
+default = ["device"]
+# cpal output. Off with --no-default-features on a machine with no audio stack; the
+# decoder, the sequence and its tests still build and run.
+device = ["dep:cpal"]
+
+[dependencies]
+fbp-core = { path = "../fbp-core" }
+symphonia = { version = "0.5", features = [
+    "mp3", "flac", "wav", "vorbis", "ogg", "aac", "alac", "isomp4", "pcm",
+] }
+rubato = "0.12"
+cpal = { version = "0.17", optional = true }

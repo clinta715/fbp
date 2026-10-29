@@ -1,0 +1,5 @@
+[package]
+name = "fbp-core"
+version.workspace = true
+edition.workspace = true
+description = "Model types for fbp. No I/O, no threads."
