@@ -7,7 +7,30 @@ half-block pixels. foobar2000's function, fooyin's layout, a terminal's form.
 
 Scope and decisions: [docs/SCOPE.md](docs/SCOPE.md).
 
-## Status: P1a — the index (2026-10-29)
+## Status: P1b — the library you can look at (2026-10-29)
+
+```bash
+fbp                          # the TUI: tree | tracks/albums | now playing/console
+fbp play bjork               # straight into playback, filtered
+fbp --shots shots            # render the panels to PNGs (needs --features shots)
+```
+
+```
+ /  filter      Tab  focus     Enter  play      space  pause/play      n/p  next/prev
+ s  sort        S  scan        m  tracks/albums  Ctrl+L  layout mode   Ctrl+S  save layout
+ Alt+1..9  load layout slot    q  quit
+```
+
+Layout mode: `h`/`v` split, `x` close, `t` change panel kind, arrows resize, `Esc` leave. The tree is
+TOML in `~/.config/fbp/layouts/` and the session (layout, focus, filter, sort) restores on start.
+
+Cover art is projected into the cell grid as half blocks: one cell carries two stacked pixels
+(`▀`, foreground over background), so a 40×20 tile is a 40×40-pixel cover in truecolor. Covers are
+fetched off the render path, keyed by album, thumbnailed to 96 px and cached in SQLite.
+
+![albums](shots/albums-200x60.png)
+
+## P1a — the index (2026-10-29)
 
 ```bash
 fbp scan --root ~/Music          # index it (no UI blocking, resumable, cancellable)

@@ -10,15 +10,21 @@ path = "src/main.rs"
 
 [features]
 default = ["device"]
-# Audio output. Off with --no-default-features: the CLI still indexes, searches and decodes.
+# Audio output. Off with --no-default-features: the UI, the index and the shots still run.
 device = ["fbp-audio/device"]
+# Headless frame capture (--shots): an 8x8 bitmap font and a PNG encoder. Off by default so
+# the shipped path carries neither.
+shots = ["dep:font8x8", "dep:png"]
 
 [dependencies]
 fbp-core = { path = "../fbp-core" }
 fbp-audio = { path = "../fbp-audio", default-features = false }
 fbp-index = { path = "../fbp-index" }
-# Only its crossterm re-export so far; the cell grid itself is P1b.
 ratatui = "0.30"
 walkdir = "2"
 dirs = "5"
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+font8x8 = { version = "0.3", optional = true }
+png = { version = "0.17", optional = true }

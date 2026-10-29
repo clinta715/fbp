@@ -6,7 +6,7 @@
 
 use rusqlite::Connection;
 
-pub const VERSION: i64 = 2;
+pub const VERSION: i64 = 3;
 
 const V1: &str = r#"
 CREATE TABLE tracks (
@@ -78,6 +78,17 @@ CREATE TABLE errors (
 );
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+-- Album covers, keyed by "albumartist \x1f album": one row per album, written the first
+-- time a panel shows that album, so indexing never reads a JPEG for an album nobody looks at.
+CREATE TABLE art (
+    album_key TEXT PRIMARY KEY,
+    source    TEXT NOT NULL,
+    width     INTEGER NOT NULL,
+    height    INTEGER NOT NULL,
+    thumb     BLOB NOT NULL,
+    at        INTEGER NOT NULL
+);
 "#;
 
 /// Create or upgrade the database, and set the pragmas a scanning writer wants.
@@ -111,6 +122,23 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             conn.execute_batch(
                 "DELETE FROM errors WHERE id NOT IN (SELECT MIN(id) FROM errors GROUP BY path);
                  CREATE UNIQUE INDEX errors_path ON errors(path);",
+            )?;
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                [VERSION.to_string()],
+            )?;
+        }
+        Some(2) => {
+            // v3: the album art cache.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS art (
+                    album_key TEXT PRIMARY KEY,
+                    source    TEXT NOT NULL,
+                    width     INTEGER NOT NULL,
+                    height    INTEGER NOT NULL,
+                    thumb     BLOB NOT NULL,
+                    at        INTEGER NOT NULL
+                );",
             )?;
             conn.execute(
                 "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",

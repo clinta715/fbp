@@ -1,9 +1,11 @@
 //! The fbp front-end.
 //!
-//! P0 shipped the audio path; P1a ships the library behind it. The front-end is still a
-//! raw-mode key loop and a status line — the panel tree, the layout engine and the art
-//! land in P1b — but every verb below goes through the same `fbp-index` API the panels
-//! will, so the TUI is a renderer, not a second implementation.
+//! No verb opens the TUI; `scan`, `search` and `stats` are the scriptable surface; `--shots`
+//! renders the frames headlessly. All of them share `fbp-index`, so the CLI and the panels
+//! cannot disagree about what the library contains.
+
+mod config;
+mod tui;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -12,35 +14,40 @@ use std::sync::Arc;
 use fbp_core::{is_audio, Track};
 use fbp_index::{Library, ScanOptions, ScanProgress, Search, Sort};
 
+use config::{db_path, Config};
+
 const USAGE: &str = "\
-fbp — a library player (P1a: the index)
+fbp — a TUI library player
 
 USAGE:
     fbp [OPTIONS] [VERB]
 
-VERBS (default: play the library):
-    play [TEXT]             play everything, or everything matching TEXT
+VERBS (default: open the TUI):
+    play [TEXT]             open the TUI and start playing (optionally filtered)
     scan                    index the library root (see --root)
     search <TEXT>           print matching tracks
     stats                   library counts and codecs
 
 OPTIONS:
-    -r, --root <DIR>        folder to walk (default: the last scanned root)
+    -r, --root <DIR>        folder to walk (default: the config's root)
     -d, --db <FILE>         index file (default: <data dir>/fbp/library.db)
     -l, --list              print the walked files and exit
         --decode-check <F>  decode one file, print rate/frames/hash, exit
-    -v, --volume <0..1>     starting volume (default: 1.0)
+        --shots <DIR>       render the panels to PNGs and exit (needs --features shots)
+    -v, --volume <0..1>     starting volume
         --threads <N>       scanner reader threads (0 = auto)
         --no-tags           scan paths and metadata only, read no tags
     -h, --help              this
 
-KEYS (playing):
-    space  pause/resume      n  next      p  previous
-    + / -  volume            q  quit
+KEYS:
+    /  filter      Tab  focus      Enter  play      space  pause/play
+    n/p  next/prev  s  sort     S  scan    m  tracks/albums
+    Ctrl+L  layout mode      Ctrl+S  save layout    Alt+1..9  load slot     q  quit
 ";
 
 #[derive(Debug)]
 enum Verb {
+    Tui,
     Play(Option<String>),
     Scan,
     Search(String),
@@ -52,15 +59,16 @@ struct Args {
     db: Option<PathBuf>,
     list: bool,
     decode_check: Option<PathBuf>,
-    volume: f32,
+    shots: Option<PathBuf>,
+    volume: Option<f32>,
     threads: usize,
     read_tags: bool,
     verb: Verb,
 }
 
 fn main() -> ExitCode {
-    // A piped-to-`head` CLI must exit quietly: Rust ignores SIGPIPE by default, so the
-    // first write after the reader leaves panics with a backtrace instead of stopping.
+    // A piped-to-head CLI must exit quietly: Rust ignores SIGPIPE, so the first write after
+    // the reader leaves panics with a backtrace instead of stopping.
     #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
@@ -77,56 +85,51 @@ fn main() -> ExitCode {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     let args = parse(args)?;
+    let mut config = Config::load();
+    if let Some(root) = &args.root {
+        config.root = root.display().to_string();
+    }
+    if let Some(volume) = args.volume {
+        config.volume = volume;
+    }
+    let db = args.db.clone().unwrap_or_else(db_path);
 
     if let Some(path) = args.decode_check.as_deref() {
         return run_decode_check(path);
     }
-
-    // `--list` and an explicit `--root` mean "the walk", exactly as in P0: no database.
-    if args.list || (args.root.is_some() && matches!(args.verb, Verb::Play(None))) {
-        let root = args.root.clone().unwrap_or_else(|| PathBuf::from("."));
-        let tracks = walk(&root)?;
-        if tracks.is_empty() {
-            return Err(format!("no audio files under {}", root.display()));
+    if let Some(dir) = &args.shots {
+        return run_shots(dir, &db, config);
+    }
+    if args.list {
+        let tracks = walk(config.root_path())?;
+        for track in &tracks {
+            println!("{}", track.path.display());
         }
-        if args.list {
-            for track in &tracks {
-                println!("{}", track.path.display());
-            }
-            return Ok(());
-        }
-        return play(tracks, args.volume);
+        return Ok(());
     }
 
-    let db = args.db.clone().unwrap_or_else(default_db_path);
-    let mut library = Library::open(&db).map_err(|e| e.to_string())?;
-
     match args.verb {
-        Verb::Scan => run_scan(
-            &mut library,
-            args.root.as_deref(),
-            &db,
-            ScanOptions {
-                read_tags: args.read_tags,
-                threads: args.threads,
-            },
-        ),
-        Verb::Search(text) => run_search(&library, &text),
-        Verb::Stats => run_stats(&library, &db),
-        Verb::Play(query) => {
-            let search = Search {
-                text: query.unwrap_or_default(),
-                sort: Sort::Artist,
-                ..Default::default()
-            };
-            let paths = library.paths(&search).map_err(|e| e.to_string())?;
-            if paths.is_empty() {
-                return Err(format!(
-                    "nothing to play in {} — run: fbp scan --root <DIR>",
-                    db.display()
-                ));
-            }
-            play(paths.into_iter().map(Track::new).collect(), args.volume)
+        Verb::Tui => tui::run(db, config, None, false),
+        Verb::Play(filter) => tui::run(db, config, filter, true),
+        Verb::Scan => {
+            let mut library = Library::open(&db).map_err(|e| e.to_string())?;
+            run_scan(
+                &mut library,
+                config.root_path(),
+                &db,
+                ScanOptions {
+                    read_tags: args.read_tags,
+                    threads: args.threads,
+                },
+            )
+        }
+        Verb::Search(text) => {
+            let library = Library::open(&db).map_err(|e| e.to_string())?;
+            run_search(&library, &text)
+        }
+        Verb::Stats => {
+            let library = Library::open(&db).map_err(|e| e.to_string())?;
+            run_stats(&library, &db)
         }
     }
 }
@@ -137,10 +140,11 @@ fn parse(args: Vec<String>) -> Result<Args, String> {
         db: None,
         list: false,
         decode_check: None,
-        volume: 1.0,
+        shots: None,
+        volume: None,
         threads: 0,
         read_tags: true,
-        verb: Verb::Play(None),
+        verb: Verb::Tui,
     };
 
     let mut index = 0;
@@ -159,14 +163,26 @@ fn parse(args: Vec<String>) -> Result<Args, String> {
                 index += 1;
                 parsed.decode_check = Some(PathBuf::from(next(&args, index, "--decode-check")?));
             }
+            "--shots" => {
+                index += 1;
+                parsed.shots = Some(PathBuf::from(next(&args, index, "--shots")?));
+            }
             "-v" | "--volume" => {
                 index += 1;
-                parsed.volume = next(&args, index, "--volume")?
-                    .parse()
-                    .map_err(|_| "--volume expects a number 0..1".to_string())?;
+                parsed.volume = Some(
+                    next(&args, index, "--volume")?
+                        .parse()
+                        .map_err(|_| "--volume expects a number 0..1".to_string())?,
+                );
             }
+            "--threads" => {
+                index += 1;
+                parsed.threads = next(&args, index, "--threads")?
+                    .parse()
+                    .map_err(|_| "--threads expects a number".to_string())?;
+            }
+            "--no-tags" => parsed.read_tags = false,
             "play" => {
-                // `play` takes the rest of the line as its query, so a title needs no quotes' worth of escaping.
                 let rest = args[index + 1..].join(" ");
                 parsed.verb = Verb::Play((!rest.trim().is_empty()).then_some(rest));
                 index = args.len();
@@ -180,13 +196,6 @@ fn parse(args: Vec<String>) -> Result<Args, String> {
                 parsed.verb = Verb::Search(text);
                 index = args.len();
             }
-            "--threads" => {
-                index += 1;
-                parsed.threads = next(&args, index, "--threads")?
-                    .parse()
-                    .map_err(|_| "--threads expects a number".to_string())?;
-            }
-            "--no-tags" => parsed.read_tags = false,
             "stats" => parsed.verb = Verb::Stats,
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -205,15 +214,8 @@ fn next(args: &[String], index: usize, flag: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{flag} needs a value"))
 }
 
-fn default_db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("fbp")
-        .join("library.db")
-}
-
-/// Every audio file under `root`, in path order. P0's walk, unchanged: it is what
-/// `--list` means and what you get before there is an index.
+/// Every audio file under `root`, in path order. What `--list` means, before there is an
+/// index.
 fn walk(root: &Path) -> Result<Vec<Track>, String> {
     if !root.exists() {
         return Err(format!("no such directory: {}", root.display()));
@@ -232,27 +234,17 @@ fn walk(root: &Path) -> Result<Vec<Track>, String> {
     Ok(tracks)
 }
 
-/// Scan off the calling thread and report from the progress atomics, which is exactly what
-/// the TUI will do in P1b (SCOPE: a scan never blocks input).
+/// Scan off the calling thread and report from the progress atomics -- the same contract the
+/// TUI uses.
 fn run_scan(
     library: &mut Library,
-    root: Option<&Path>,
+    root: &Path,
     db: &Path,
     options: ScanOptions,
 ) -> Result<(), String> {
-    let root = match root {
-        Some(root) => root.to_path_buf(),
-        None => match library.root() {
-            Some(root) => PathBuf::from(root),
-            None => dirs::audio_dir().unwrap_or_else(|| PathBuf::from("~/Music")),
-        },
-    };
-
     println!("scanning {} into {}", root.display(), db.display());
     let progress = Arc::new(ScanProgress::new());
 
-    // The scan runs here; a reporter thread polls the same atomics the TUI will. This is
-    // the "a scan never blocks input" contract exercised with nothing but stdout.
     let reporter_progress = progress.clone();
     let reporter = std::thread::spawn(move || {
         use std::io::Write;
@@ -270,7 +262,7 @@ fn run_scan(
     });
 
     let report = library
-        .scan(&root, options, &progress)
+        .scan(root, options, &progress)
         .map_err(|e| e.to_string())?;
     let _ = reporter.join();
     println!();
@@ -379,133 +371,17 @@ fn run_decode_check(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(feature = "device")]
-fn play(tracks: Vec<Track>, volume: f32) -> Result<(), String> {
-    use std::collections::HashMap;
-    use std::io::Write;
-    use std::time::Duration;
-
-    use fbp_audio::Player;
-    use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-    use ratatui::crossterm::{cursor, execute, terminal};
-
-    let total = tracks.len();
-    let player = Player::open(tracks.clone(), volume)?;
-    let mut durations: HashMap<u32, u64> = HashMap::new();
-    let mut status_track = u32::MAX;
-    let mut error_count = 0usize;
-    let mut last_error = String::new();
-
-    terminal::enable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(std::io::stdout(), cursor::Hide).map_err(|e| e.to_string())?;
-
-    let outcome = (|| -> Result<(), String> {
-        loop {
-            if event::poll(Duration::from_millis(80)).map_err(|e| e.to_string())? {
-                if let Event::Key(key) = event::read().map_err(|e| e.to_string())? {
-                    // Plain keys only: a pty that hands us a NUL (Ctrl+Space) at startup
-                    // must not toggle the transport.
-                    let plain = !key.modifiers.intersects(
-                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    );
-                    if key.kind == KeyEventKind::Press && plain {
-                        match key.code {
-                            KeyCode::Char(' ') => player.toggle_pause(),
-                            KeyCode::Char('n') => player.next(),
-                            KeyCode::Char('p') => player.prev(),
-                            KeyCode::Char('+') | KeyCode::Char('=') => {
-                                player.set_volume(player.shared.volume() + 0.05)
-                            }
-                            KeyCode::Char('-') => player.set_volume(player.shared.volume() - 0.05),
-                            KeyCode::Char('q') | KeyCode::Esc => break,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            for error in player.shared.take_errors() {
-                error_count += 1;
-                last_error = error;
-            }
-            if player.shared.finished() {
-                break;
-            }
-
-            let track = player.track();
-            if track != status_track {
-                status_track = track;
-                if let Some(entry) = tracks.get(track as usize) {
-                    durations
-                        .entry(track)
-                        .or_insert_with(|| fbp_audio::probe_duration_ms(&entry.path).unwrap_or(0));
-                }
-            }
-
-            let position = player.position_ms();
-            let duration = durations.get(&track).copied().unwrap_or(0);
-            let name = tracks
-                .get(track as usize)
-                .map(|t| t.file_name())
-                .unwrap_or_else(|| "-".to_string());
-            let state = if player.shared.paused() {
-                "paused"
-            } else {
-                "playing"
-            };
-            let mut line = format!(
-                "[{:>4}/{}] {}   {} / {}   {}   vol {:.0}%",
-                track as usize + 1,
-                total,
-                name,
-                clock(position),
-                if duration == 0 {
-                    "--:--".to_string()
-                } else {
-                    clock(duration)
-                },
-                state,
-                player.shared.volume() * 100.0,
-            );
-            if error_count > 0 {
-                line.push_str(&format!("   errors {error_count} (last: {last_error})"));
-            }
-            // A pty with no size set reports 0 columns; never truncate to nothing.
-            let width = terminal::size()
-                .map(|(w, _)| w as usize)
-                .unwrap_or(120)
-                .max(40);
-            let line = truncate(&line, width.saturating_sub(1));
-            print!("\r{line}\x1b[K");
-            let _ = std::io::stdout().flush();
-        }
-        Ok(())
-    })();
-
-    let _ = execute!(std::io::stdout(), cursor::Show);
-    let _ = terminal::disable_raw_mode();
-    let mut player = player;
-    player.stop();
-    println!();
-    outcome
-}
-
-#[cfg(not(feature = "device"))]
-fn play(_tracks: Vec<Track>, _volume: f32) -> Result<(), String> {
-    Err("built without the `device` feature: no audio output (try --list or --decode-check)".into())
-}
-
-#[cfg(feature = "device")]
-fn clock(ms: u64) -> String {
-    format!("{}:{:02}", ms / 60_000, (ms / 1_000) % 60)
-}
-
-#[cfg(feature = "device")]
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
+#[cfg(feature = "shots")]
+fn run_shots(dir: &Path, db: &Path, config: Config) -> Result<(), String> {
+    let mut app = tui::app::App::open(db.to_path_buf(), config, None, false)?;
+    let written = tui::shot::capture_all(&mut app, dir)?;
+    for path in written {
+        println!("{}", path.display());
     }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
+    Ok(())
+}
+
+#[cfg(not(feature = "shots"))]
+fn run_shots(_dir: &Path, _db: &Path, _config: Config) -> Result<(), String> {
+    Err("built without the `shots` feature: cargo build --release --features shots".into())
 }

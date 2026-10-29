@@ -11,6 +11,7 @@
 //! - **A broken file is a row.** It lands in `tracks` (with whatever the container would
 //!   tell us) *and* in `errors`, so an unplayable file is visible instead of absent.
 
+mod art;
 mod query;
 mod scan;
 mod schema;
@@ -19,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+pub use art::{album_key, Art};
 pub use query::{AlbumRow, Row, Search, Sort, Stats};
 pub use scan::{ScanOptions, ScanProgress, ScanReport};
 
@@ -26,6 +28,7 @@ pub use scan::{ScanOptions, ScanProgress, ScanReport};
 pub enum Error {
     Sql(rusqlite::Error),
     Io(std::io::Error),
+    Art(String),
 }
 
 impl std::fmt::Display for Error {
@@ -33,6 +36,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Sql(e) => write!(f, "database: {e}"),
             Error::Io(e) => write!(f, "io: {e}"),
+            Error::Art(e) => write!(f, "art: {e}"),
         }
     }
 }
@@ -153,6 +157,30 @@ impl Library {
             .prepare("SELECT path, message FROM errors ORDER BY id")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The album's cover, from the cache only: never touches the filesystem, so a render
+    /// path can call it every frame. None means "not fetched yet" or "this album has none".
+    pub fn album_art(&self, albumartist: Option<&str>, album: &str) -> Result<Option<Art>> {
+        art::cached(&self.conn, albumartist, album)
+    }
+
+    /// Fetch the album's cover: cache first, then the embedded picture of the album's first
+    /// track, then a sidecar image in its directory. The decoded 96px thumbnail is stored so
+    /// the next call is a SELECT.
+    pub fn fetch_album_art(&self, albumartist: Option<&str>, album: &str) -> Result<Option<Art>> {
+        if let Some(cached) = self.album_art(albumartist, album)? {
+            return Ok(Some(cached));
+        }
+        art::fetch(&self.conn, albumartist, album)
+    }
+
+    /// The number of cached covers, so tests and stats can see the cache working.
+    pub fn art_count(&self) -> Result<usize> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM art", [], |row| row.get::<_, i64>(0))?
+            as usize)
     }
 
     pub fn count(&self) -> Result<usize> {

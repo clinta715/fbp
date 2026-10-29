@@ -9,3 +9,4 @@ fbp-core = { path = "../fbp-core" }
 rusqlite = { version = "0.41", features = ["bundled"] }
 lofty = "0.25"
 walkdir = "2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

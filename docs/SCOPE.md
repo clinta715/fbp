@@ -1,13 +1,14 @@
 # fbp — scope
 
-**Status:** scope doc, draft 3 (P0 and P1a landed — see §10).
+**Status:** scope doc, draft 4 (P0, P1a and P1b landed — see §10).
 **Working name:** `fbp` (foobar, projected — rename freely).
 **Reference implementation for the UI spine:** `/mnt/nvme2/build/htrk3` (DESIGN §UI strategy).
 **Target library:** `~/Music` → `/mnt/md0/mp3`: **115,577 files**, 99,329 mp3, 671 opus, 1,654 m3u,
 363 cue, 5,471 cover images. Every budget below is set against that number.
 
-**Landed:** P0 the audio path, P1a the index (schema, incremental scanner, tags, FTS). The panel
-tree, the layout engine and cover art are P1b.
+**Landed:** P0 the audio path · P1a the index (schema, incremental scanner, tags, FTS) · P1b the
+layout engine, five panels, half-block cover art and headless PNG shots. P1c is MCP, playlist
+files/cue sheets, and panels bound to saved views.
 
 **Decided (draft 2):**
 - **Linux only.** cpal stays portable as a side effect; macOS/Windows are untested, not targets.
@@ -81,27 +82,40 @@ workspaces. Not foobar's full flexibility — no scripting, no UI DSL, no plugin
 windows — but enough that two people's screens look different.
 
 ```toml
-# ~/.config/fbp/layouts/default.toml
-[[node]]                       # every node is one of three kinds: split, tabs, panel
+# ~/.config/fbp/layouts/default.toml  (as built; serde-tagged, so the file is one [node] table)
+[node]
 kind = "split"
 axis = "horizontal"
-weights = [28, 44, 28]         # cells, cell-granular
-[[node.child]]
-kind  = "panel"
-panel = "tree"                 # panel vocabulary, §6
-[[node.child]]
-kind   = "tabs"
+weights = [26, 44, 30]          # cells, cell-granular
+
+[[node.children]]
+kind = "panel"
+panel = "tree"
+
+[[node.children]]
+kind = "tabs"
 active = 0
-[[node.child.child]]
-kind   = "panel"; panel = "table"; view = "all-tracks"   # a view = filter+columns+sort
-[[node.child.child]]
-kind   = "panel"; panel = "albums"; view = "recent"
-[[node.child]]
-kind  = "split"; axis = "vertical"; weights = [60, 40]
-[[node.child.child]]
-kind  = "panel"; panel = "nowplaying"
-[[node.child.child]]
-kind  = "panel"; panel = "playlist"
+
+[[node.children.children]]
+kind = "panel"
+panel = "table"
+
+[[node.children.children]]
+kind = "panel"
+panel = "albums"
+
+[[node.children]]
+kind = "split"
+axis = "vertical"
+weights = [62, 38]
+
+[[node.children.children]]
+kind = "panel"
+panel = "nowplaying"
+
+[[node.children.children]]
+kind = "panel"
+panel = "console"
 ```
 
 - **Three node kinds.** `Panel`, `Tabs` (foobar's tab stack), `Split` (axis + weights). Depth ≤ 4,
@@ -110,12 +124,16 @@ kind  = "panel"; panel = "playlist"
 - **Panels are instantiated, not singletons.** Two track tables side by side, each bound to a different
   **view** (a saved filter + column set + sort + group-by) is the single most-used foobar layout, so
   views are first-class rows in the DB, not per-window state.
-- **Editing in-app.** `Ctrl+L` enters layout mode: split h/v, close, change panel type, bind a view,
-  arrows resize (cell-granular), tabify with the neighbour, rename/save/save-as. Every edit writes the
-  TOML immediately; a bad layout is one `--layout default` away from being recoverable.
-- **Named workspaces** `Alt+1..9`, switchable instantly, each a full layout; `fbp --layout <name>`.
-- **Layouts are shareable files** and every layout in `layouts/` is a `shots` target in CI, so a
-  layout-file change cannot silently break a panel's geometry.
+- **Editing in-app.** `Ctrl+L` enters layout mode: `h`/`v` split the focused panel, `x` closes it,
+  `t` cycles its panel kind, arrows resize (cell-granular), `Esc` leaves. `Ctrl+S` writes the current
+  tree to `layouts/<config.layout>.toml`, so a good arrangement is one keystroke from being kept and
+  a bad one one keystroke from being replaced.
+- **Workspaces** `Alt+1..9` load `layouts/slotN.toml`; there is no in-app "save as slot" yet (P1c).
+- **Layouts are shareable files** and every layout in `layouts/` is a `shots` target, so a layout
+  change cannot silently break a panel's geometry.
+- **Limit as built:** one instance per panel kind (a second `table` panel would share the first
+  one's selection). Panels as *instances bound to saved views* is P1c, which is also when
+  `views(id, name, filter, columns, sort, group_by)` gets a UI.
 
 **Why this and the projection matrix are one mechanism:** a panel receives a `Rect` and publishes
 cells plus an `Overlay`. It does not know whether that rect will be rasterised to glyphs or pixels, and
@@ -348,13 +366,27 @@ top of them. 24 tests, including a serial-vs-parallel determinism check. Numbers
 rescan of 100,640 files is **0.5 s** (budget < 5 s), FTS is 3–21 ms, and the real library's 102
 unparseable files are visible error rows.
 
-**P1b — the library you can look at.** Layout engine v0 (fixed default tree, resizable, persisted;
-panel/tabs/split); panels tree/table/albums/playlist/nowplaying/console; saved views + quick filter;
-playlists; m3u and cue import; ratings/counters; session restore; art cache with half-block projection;
-`shots`; MCP.
-*Accept:* filter keystroke → repaint on the full table < 16 ms; a 200×60 shot of the `albums` panel
-shows real cover art; the default layout restores exactly after a restart; a scan runs while the table
-scrolls with p99 input latency < 50 ms.
+**P1b — the library you can look at (landed 2026-10-29).** The layout engine (panel/tabs/split, TOML,
+in-app editing, cell-granular weights); five panels (library tree, track table, album wall, now playing,
+console); the async art cache with half-block projection; the FTS quick filter; playback from the
+table/album wall; a background scan with progress in the console; session restore (layout, focus,
+filter, sort); and `--shots`, which renders any frame to a PNG through `TestBackend` + `font8x8`.
+
+*Evidence:* 37 tests, including the two that matter here — `the_albums_panel_renders_real_cover_art`
+(scans a fixture library with a real cover, renders the albums tab, decodes the PNG and requires >200
+distinct colours, i.e. the art reached the pixels) and
+`the_default_layout_round_trips_through_toml` / `split_close_and_resize_keep_the_tree_well_formed`
+(the tree survives editing). Live checks: the TUI runs in a pty and quits cleanly on `q`; four PNGs
+(80×24, 200×60, and the albums tab at both) render from the real 100,640-track library; the whole UI
+also builds and renders with `--no-default-features` (no audio stack at all), which is what makes
+`--shots` usable in CI.
+
+**Moved out of P1b into P1c:** MCP, m3u/cue import, playback stats (play counts/ratings UI), and
+panels bound to saved views. Also deferred, with the reason recorded: the quick filter uses FTS5
+(3–18 ms in-process) rather than `nucleo` — it meets the keystroke budget on the real library, so the
+fuzzy matcher only earns its place for in-view filtering, which is P1c. Cover art is keyed by album
+(`albumartist \x1f album`) rather than by content hash: it is fetched lazily per album, so the album
+key *is* the dedupe, and the content hash buys nothing until art is written back (P2).
 
 **P2 — library management (the weight centre).** Tag write; file ops (move/rename/organize, dry-run,
 undo journal); missing-file relocate; duplicate finder; query language + autoplaylists; ReplayGain
@@ -377,11 +409,11 @@ Budget table (release build, the real 115k library):
 
 | Metric | Target | Measured |
 |---|---|---|
-| cold start → interactive (warm DB) | < 150 ms | — |
+| cold start → interactive (warm DB) | < 150 ms | 26 ms empty DB; **591 ms** for the shot path on 100k tracks (16 covers fetched + six 3200×1200 PNGs), of which the row/album/artist load is a fraction |
 | warm rescan (stat only) | < 5 s | **0.5–0.7 s** (P1a) |
 | first-ever scan of 100k files | — | ~40 min serial, ~17 min with 8 readers (this RAID1) |
 | key → repaint | < 16 ms | — |
-| filter over 100k rows | < 16 ms/keystroke | **3–21 ms** incl. process start (P1a) |
+| filter over 100k rows | < 16 ms/keystroke | **3–18 ms** in-process (3–21 ms incl. process start) |
 | seek → audible | < 100 ms | — |
 | track → track (gapless) | 0 samples | **0** (P0) |
 | RSS with 100k tracks + art | < 300 MB | — |
