@@ -5,7 +5,8 @@ A local-file audio library manager and player with a **bitmap-projected TUI**: o
 screenshots — with cover art, waveforms and scopes carried *into* the cell grid as
 half-block pixels. foobar2000's function, fooyin's layout, a terminal's form.
 
-Scope and decisions: [docs/SCOPE.md](docs/SCOPE.md).
+Docs: [HANDOFF](docs/HANDOFF.md) (state, map, next steps) · [SCOPE](docs/SCOPE.md) (plan and
+decisions) · [BACKLOG](docs/BACKLOG.md) (what each phase deferred, and why).
 
 ## Status: P2a — tag editing (2026-10-29)
 
