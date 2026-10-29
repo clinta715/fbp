@@ -393,6 +393,11 @@ key *is* the dedupe, and the content hash buys nothing until art is written back
 
 *Evidence:* 8 writer tests in `fbp-index/tests/tags.rs` (mp3 and flac round-trip through their own tag formats; multi-file is one undo entry; undo walks back gesture by gesture; clearing removes; a bad number is refused before any file is touched; a failed write leaves the original bytes and no temp files) and 3 UI tests that push real keys through the panel and assert on the file on disk — commit, Esc, and apply-to-all refusing on `n` / writing on `y`, with one undo per gesture.
 
+*Two boundaries worth stating plainly:* undo restores **values, not bytes** — the tag block is
+re-encoded by the rewrite (a fixture grew 1006 bytes of ID3v2 padding on an edit-and-undo round trip),
+the audio stream is untouched and the file still decodes. And a *failed* write is byte-identical: that
+is the property the test pins, because that is the one that protects a library.
+
 *Deviations recorded:* the panel edits one track at a time and `A` applies the last edited field to every filtered track behind a y/N confirmation (a multi-select model is P2c); the `fbp tag set` CLI verb belongs with dry-run, i.e. P2b; the journal lives in the database, so the TUI and the CLI share one undo history instead of two.
 **P2b — file operations.** Move/rename/organize by pattern with a dry-run preview and the same journal; missing-file relocate; duplicate finder; `fbp tag set` with `--dry-run`; query language + autoplaylists; ReplayGain scan/write; tag⇄filename guessing; art write; playlist export.
 *Accept:* a multi-file tag edit is **one** undo entry and survives a kill mid-write (temp+rename, no
