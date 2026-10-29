@@ -69,7 +69,10 @@ impl Decoder {
             .format(
                 &hint,
                 mss,
-                &FormatOptions { enable_gapless: true, ..Default::default() },
+                &FormatOptions {
+                    enable_gapless: true,
+                    ..Default::default()
+                },
                 &MetadataOptions::default(),
             )
             .map_err(|e| Error::Probe(format!("{}: {e}", path.display())))?;
@@ -83,7 +86,14 @@ impl Decoder {
         let sample_rate = params.sample_rate.unwrap_or(44_100);
         let decoder = symphonia::default::get_codecs().make(&params, &DecoderOptions::default())?;
 
-        Ok(Self { format, decoder, track_id, sample_rate, stereo: Vec::new(), done: false })
+        Ok(Self {
+            format,
+            decoder,
+            track_id,
+            sample_rate,
+            stereo: Vec::new(),
+            done: false,
+        })
     }
 
     /// The rate of the samples this decoder returns (not the device's).
@@ -163,7 +173,10 @@ pub fn probe_duration_ms(path: &Path) -> Option<u64> {
         .format(
             &hint,
             mss,
-            &FormatOptions { enable_gapless: true, ..Default::default() },
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
             &MetadataOptions::default(),
         )
         .ok()?;

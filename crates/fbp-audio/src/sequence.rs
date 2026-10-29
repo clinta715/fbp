@@ -93,7 +93,11 @@ impl Sequence {
                 match Decoder::open(&self.tracks[index]) {
                     Ok(decoder) => {
                         let resampler = Resampler::new(decoder.sample_rate(), self.target_rate);
-                        self.current = Some(Current { index, decoder, resampler });
+                        self.current = Some(Current {
+                            index,
+                            decoder,
+                            resampler,
+                        });
                     }
                     Err(e) => {
                         self.errors.push((index, e.to_string()));
@@ -115,7 +119,11 @@ impl Sequence {
                     if samples.is_empty() {
                         continue;
                     }
-                    return Some(Block { track: index, generation: 0, samples });
+                    return Some(Block {
+                        track: index,
+                        generation: 0,
+                        samples,
+                    });
                 }
                 None => {
                     let tail = match current.resampler.as_mut() {
@@ -125,7 +133,11 @@ impl Sequence {
                     self.cursor = current.index + 1;
                     self.current = None;
                     if !tail.is_empty() {
-                        return Some(Block { track: index, generation: 0, samples: tail });
+                        return Some(Block {
+                            track: index,
+                            generation: 0,
+                            samples: tail,
+                        });
                     }
                 }
             }

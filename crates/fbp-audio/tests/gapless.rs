@@ -11,6 +11,14 @@ use fbp_core::Track;
 
 const RATE: u32 = 44_100;
 
+/// Committed fixtures: two 2 s LAME mp3s, so the encoder-delay path is tested without
+/// needing ffmpeg at test time.
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join(name)
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fbp-p0-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -71,8 +79,10 @@ fn the_playlist_is_the_exact_concatenation_of_its_files() {
         expected
     };
 
-    let mut sequence =
-        Sequence::new(vec![Track::new(first.clone()), Track::new(second.clone())], RATE);
+    let mut sequence = Sequence::new(
+        vec![Track::new(first.clone()), Track::new(second.clone())],
+        RATE,
+    );
     let mut played = Vec::new();
     let mut tracks = Vec::new();
     while let Some(block) = sequence.next_block() {
@@ -81,13 +91,54 @@ fn the_playlist_is_the_exact_concatenation_of_its_files() {
         played.extend_from_slice(&block.samples);
     }
 
-    assert_eq!(played.len(), expected.len(), "sample count changed at a boundary");
+    assert_eq!(
+        played.len(),
+        expected.len(),
+        "sample count changed at a boundary"
+    );
     assert_eq!(played, expected, "samples differ: gapless is broken");
     assert_eq!(played.len(), (5_000 + 3_000) * 2);
 
     let mut switches = tracks.windows(2).filter(|w| w[0] != w[1]);
     assert_eq!(switches.next(), Some(&[0u32, 1u32][..]));
     assert_eq!(switches.next(), None);
+}
+
+/// `enable_gapless` is what keeps an mp3 from opening with ~1105 samples of encoder
+/// delay. Two seconds at 44.1 kHz must decode to two seconds.
+#[test]
+fn mp3_encoder_delay_is_trimmed() {
+    for name in ["tone-a.mp3", "tone-b.mp3"] {
+        let path = fixture(name);
+        let frames = decode_all(&path).len() / 2;
+        assert!(
+            (frames as i64 - 88_200).abs() <= 256,
+            "{name}: expected ~88200 frames, got {frames}"
+        );
+    }
+}
+
+/// The same two mp3s through the sequence: no silent block at the seam.
+#[test]
+fn mp3_tracks_join_without_silence() {
+    let tracks = vec![
+        Track::new(fixture("tone-a.mp3")),
+        Track::new(fixture("tone-b.mp3")),
+    ];
+    let mut sequence = Sequence::new(tracks, RATE);
+    let mut played = Vec::new();
+    while let Some(block) = sequence.next_block() {
+        played.extend_from_slice(&block.samples);
+    }
+    let frames = played.len() / 2;
+    assert!(
+        (frames as i64 - 2 * 88_200).abs() <= 512,
+        "expected ~176400 frames for two 2 s files, got {frames}"
+    );
+    let seam = 88_200usize;
+    let window = &played[(seam - 256) * 2..(seam + 256) * 2];
+    let peak = window.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05, "the seam is silent: peak {peak}");
 }
 
 #[test]
@@ -104,7 +155,11 @@ fn a_broken_file_is_an_error_row_and_the_stream_continues() {
         played += block.samples.len();
     }
     let errors = sequence.take_errors();
-    assert_eq!(errors.len(), 1, "the broken file is reported once: {errors:?}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "the broken file is reported once: {errors:?}"
+    );
     assert_eq!(errors[0].0, 0);
     assert_eq!(played, 1_000 * 2, "the good file still played, in full");
 }
@@ -127,9 +182,18 @@ fn fill_output_stitches_blocks_and_tracks_the_track() {
     let shared = Shared::new(RATE);
     let mut state = PullState::new();
 
-    tx.send(Block { track: 0, generation: 0, samples: vec![0.1, 0.2, 0.3, 0.4] })
-        .unwrap();
-    tx.send(Block { track: 0, generation: 0, samples: vec![0.5, 0.6] }).unwrap();
+    tx.send(Block {
+        track: 0,
+        generation: 0,
+        samples: vec![0.1, 0.2, 0.3, 0.4],
+    })
+    .unwrap();
+    tx.send(Block {
+        track: 0,
+        generation: 0,
+        samples: vec![0.5, 0.6],
+    })
+    .unwrap();
 
     let mut data = vec![0.0f32; 8];
     fbp_audio::fill_output(&mut data, &rx, &shared, &mut state);
@@ -138,7 +202,12 @@ fn fill_output_stitches_blocks_and_tracks_the_track() {
     assert_eq!(shared.position_ms(), 3 * 1000 / RATE as u64);
 
     // A new track starts: the track index and the position clock reset at the boundary.
-    tx.send(Block { track: 1, generation: 0, samples: vec![0.7, 0.8] }).unwrap();
+    tx.send(Block {
+        track: 1,
+        generation: 0,
+        samples: vec![0.7, 0.8],
+    })
+    .unwrap();
     fbp_audio::fill_output(&mut data, &rx, &shared, &mut state);
     assert_eq!(data[..2], [0.7, 0.8]);
     assert_eq!(shared.track(), 1);
@@ -152,7 +221,12 @@ fn pause_is_silence_without_consuming_the_queue() {
     let (tx, rx) = sync_channel::<Block>(4);
     let shared = Shared::new(RATE);
     let mut state = PullState::new();
-    tx.send(Block { track: 0, generation: 0, samples: vec![0.25, 0.25] }).unwrap();
+    tx.send(Block {
+        track: 0,
+        generation: 0,
+        samples: vec![0.25, 0.25],
+    })
+    .unwrap();
 
     shared.set_paused(true);
     let mut data = vec![1.0f32; 4];
@@ -174,12 +248,26 @@ fn blocks_from_a_skipped_track_are_dropped() {
     let mut state = PullState::new();
 
     shared.bump_generation();
-    tx.send(Block { track: 0, generation: 0, samples: vec![0.9, 0.9] }).unwrap();
-    tx.send(Block { track: 1, generation: 1, samples: vec![0.1, 0.1] }).unwrap();
+    tx.send(Block {
+        track: 0,
+        generation: 0,
+        samples: vec![0.9, 0.9],
+    })
+    .unwrap();
+    tx.send(Block {
+        track: 1,
+        generation: 1,
+        samples: vec![0.1, 0.1],
+    })
+    .unwrap();
 
     let mut data = vec![0.0f32; 2];
     fbp_audio::fill_output(&mut data, &rx, &shared, &mut state);
-    assert_eq!(data, [0.1, 0.1], "the stale block must be discarded, not played");
+    assert_eq!(
+        data,
+        [0.1, 0.1],
+        "the stale block must be discarded, not played"
+    );
     assert_eq!(shared.track(), 1);
 }
 
@@ -191,7 +279,12 @@ fn volume_scales_the_output() {
     let shared = Shared::new(RATE);
     let mut state = PullState::new();
     shared.set_volume(0.5);
-    tx.send(Block { track: 0, generation: 0, samples: vec![1.0, -0.5] }).unwrap();
+    tx.send(Block {
+        track: 0,
+        generation: 0,
+        samples: vec![1.0, -0.5],
+    })
+    .unwrap();
 
     let mut data = vec![0.0f32; 2];
     fbp_audio::fill_output(&mut data, &rx, &shared, &mut state);

@@ -130,7 +130,10 @@ fn run_decode_check(path: &Path) -> Result<(), String> {
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
-    println!("{}: {rate} Hz, {frames} frames, hash {hash:#018x}", path.display());
+    println!(
+        "{}: {rate} Hz, {frames} frames, hash {hash:#018x}",
+        path.display()
+    );
     Ok(())
 }
 
@@ -171,9 +174,7 @@ fn play(tracks: Vec<Track>, volume: f32) -> Result<(), String> {
                             KeyCode::Char('+') | KeyCode::Char('=') => {
                                 player.set_volume(player.shared.volume() + 0.05)
                             }
-                            KeyCode::Char('-') => {
-                                player.set_volume(player.shared.volume() - 0.05)
-                            }
+                            KeyCode::Char('-') => player.set_volume(player.shared.volume() - 0.05),
                             KeyCode::Char('q') | KeyCode::Esc => break,
                             _ => {}
                         }
@@ -205,14 +206,22 @@ fn play(tracks: Vec<Track>, volume: f32) -> Result<(), String> {
                 .get(track as usize)
                 .map(|t| t.file_name())
                 .unwrap_or_else(|| "-".to_string());
-            let state = if player.shared.paused() { "paused" } else { "playing" };
+            let state = if player.shared.paused() {
+                "paused"
+            } else {
+                "playing"
+            };
             let mut line = format!(
                 "[{:>4}/{}] {}   {} / {}   {}   vol {:.0}%",
                 track as usize + 1,
                 total,
                 name,
                 clock(position),
-                if duration == 0 { "--:--".to_string() } else { clock(duration) },
+                if duration == 0 {
+                    "--:--".to_string()
+                } else {
+                    clock(duration)
+                },
                 state,
                 player.shared.volume() * 100.0,
             );

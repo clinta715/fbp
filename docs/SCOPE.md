@@ -317,8 +317,10 @@ the interpolator's group delay is dropped once per track so a converted track is
 shifted ~1.5 ms against an unconverted one. `Sequence` skips unopenable files as error
 rows and keeps playing. Evidence on the real machine: mp3/flac/wav decode; **opus is
 probed, listed, and reported as unsupported** (D3 as designed); the 115k-file walk (100,640
-audio files) takes **465 ms** in a debug build; all 11 tests pass with and without the
-`device` feature.
+audio files) takes **465 ms** in a debug build; all 13 tests pass with and without the
+`device` feature. Two committed 2 s LAME mp3 fixtures pin the other half of gapless —
+`mp3_encoder_delay_is_trimmed` (the trim flag is on) and `mp3_tracks_join_without_silence`
+(no silent block at the seam).
 
 **P1 — the library.** SQLite + scanner + tags + art cache + FTS; layout engine v0 (fixed default tree,
 resizable, persisted); tree/table/albums/playlist/nowplaying panels; views + quick filter; playlists;

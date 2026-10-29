@@ -107,11 +107,13 @@ impl Resampler {
 
     fn process(&mut self) {
         let input = [&self.left[..], &self.right[..]];
-        let Ok(planes) = self.inner.process(&input, None) else { return };
+        let Ok(planes) = self.inner.process(&input, None) else {
+            return;
+        };
         let frames = planes[0].len().min(planes[1].len());
-        for i in 0..frames {
-            self.out.push(planes[0][i]);
-            self.out.push(planes[1][i]);
+        for (left, right) in planes[0].iter().zip(planes[1].iter()).take(frames) {
+            self.out.push(*left);
+            self.out.push(*right);
         }
         if self.skip > 0 {
             let drop = self.skip.min(self.out.len() / 2);

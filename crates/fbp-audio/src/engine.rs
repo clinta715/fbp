@@ -76,7 +76,8 @@ impl Shared {
     }
 
     pub fn set_volume(&self, volume: f32) {
-        self.volume.store(volume.clamp(0.0, 1.5).to_bits(), Ordering::Relaxed);
+        self.volume
+            .store(volume.clamp(0.0, 1.5).to_bits(), Ordering::Relaxed);
     }
 
     pub fn track(&self) -> u32 {
@@ -111,7 +112,10 @@ impl Shared {
 
     /// Errors seen since the last call, already formatted for a status line.
     pub fn take_errors(&self) -> Vec<String> {
-        self.errors.lock().map(|mut e| std::mem::take(&mut *e)).unwrap_or_default()
+        self.errors
+            .lock()
+            .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
     }
 }
 
@@ -165,7 +169,9 @@ pub fn fill_output(data: &mut [f32], rx: &Receiver<Block>, shared: &Shared, stat
             }
         }
 
-        let Some(block) = state.block.as_ref() else { break };
+        let Some(block) = state.block.as_ref() else {
+            break;
+        };
         let available = block.samples.len() - state.offset;
         let room = data.len() - written;
         let n = available.min(room) & !1;
