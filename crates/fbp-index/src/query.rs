@@ -11,7 +11,7 @@ use rusqlite::{params_from_iter, Connection};
 
 const COLUMNS: &str = "t.id, t.path, t.title, t.artist, t.albumartist, t.album, t.track_no,\
      t.disc_no, t.year, t.genre, t.duration_ms, t.codec, t.sample_rate, t.bitrate, t.size,\
-     t.missing, t.play_count, t.rating, t.filename";
+     t.missing, t.play_count, t.rating, t.filename, t.composer, t.comment";
 
 /// What a list panel asks for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +98,8 @@ pub struct Row {
     pub play_count: i64,
     pub rating: Option<i64>,
     pub filename: String,
+    pub composer: Option<String>,
+    pub comment: Option<String>,
 }
 
 impl Row {
@@ -111,6 +113,23 @@ impl Row {
 
     pub fn path_buf(&self) -> PathBuf {
         PathBuf::from(&self.path)
+    }
+
+    /// The editable value of a tag field, as the Properties panel shows it.
+    pub fn field(&self, field: fbp_core::tag::Field) -> Option<String> {
+        use fbp_core::tag::Field;
+        match field {
+            Field::Title => self.title.clone(),
+            Field::Artist => self.artist.clone(),
+            Field::AlbumArtist => self.albumartist.clone(),
+            Field::Album => self.album.clone(),
+            Field::Genre => self.genre.clone(),
+            Field::Year => self.year.map(|v| v.to_string()),
+            Field::TrackNo => self.track_no.map(|v| v.to_string()),
+            Field::DiscNo => self.disc_no.map(|v| v.to_string()),
+            Field::Composer => self.composer.clone(),
+            Field::Comment => self.comment.clone(),
+        }
     }
 
     pub fn clock(&self) -> String {
@@ -142,6 +161,8 @@ fn row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         play_count: row.get(16)?,
         rating: row.get(17)?,
         filename: row.get(18)?,
+        composer: row.get(19)?,
+        comment: row.get(20)?,
     })
 }
 

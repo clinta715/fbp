@@ -15,15 +15,17 @@ pub enum PanelKind {
     Table,
     Albums,
     NowPlaying,
+    Properties,
     Console,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 5] = [
+    pub const ALL: [PanelKind; 6] = [
         PanelKind::Tree,
         PanelKind::Table,
         PanelKind::Albums,
         PanelKind::NowPlaying,
+        PanelKind::Properties,
         PanelKind::Console,
     ];
 
@@ -33,6 +35,7 @@ impl PanelKind {
             PanelKind::Table => "tracks",
             PanelKind::Albums => "albums",
             PanelKind::NowPlaying => "now playing",
+            PanelKind::Properties => "properties",
             PanelKind::Console => "console",
         }
     }
@@ -92,7 +95,13 @@ impl Node {
                     axis: Axis::Vertical,
                     weights: vec![62, 38],
                     children: vec![
-                        Node::panel(PanelKind::NowPlaying),
+                        Node::Tabs {
+                            active: 0,
+                            children: vec![
+                                Node::panel(PanelKind::NowPlaying),
+                                Node::panel(PanelKind::Properties),
+                            ],
+                        },
                         Node::panel(PanelKind::Console),
                     ],
                 },

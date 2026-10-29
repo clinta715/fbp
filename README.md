@@ -7,7 +7,23 @@ half-block pixels. foobar2000's function, fooyin's layout, a terminal's form.
 
 Scope and decisions: [docs/SCOPE.md](docs/SCOPE.md).
 
-## Status: P1b — the library you can look at (2026-10-29)
+## Status: P2a — tag editing (2026-10-29)
+
+```bash
+fbp                          # the TUI
+M                            # show the properties tab (tag editor)
+Enter                        # edit the selected field, type, Enter to commit, Esc to cancel
+A                            # apply the last edited field to every filtered track (asks first)
+u                            # undo the last edit, files included
+```
+
+Tag writes are atomic (temp file beside the original, then rename), journalled before the first file is
+touched, and undone from the same journal. One gesture is one undo entry, whether it touched one file
+or five hundred.
+
+![properties](shots/properties-200x60.png)
+
+## P1b — the library you can look at (2026-10-29)
 
 ```bash
 fbp                          # the TUI: tree | tracks/albums | now playing/console

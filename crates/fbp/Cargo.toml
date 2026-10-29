@@ -28,3 +28,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 font8x8 = { version = "0.3", optional = true }
 png = { version = "0.17", optional = true }
+
+[dev-dependencies]
+# The UI tests assert on the file, not on the index: the write is the thing being tested.
+lofty = "0.25"

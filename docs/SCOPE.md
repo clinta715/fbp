@@ -1,14 +1,12 @@
 # fbp — scope
 
-**Status:** scope doc, draft 4 (P0, P1a and P1b landed — see §10).
+**Status:** scope doc, draft 5 (P0, P1a, P1b and P2a landed — see §10).
 **Working name:** `fbp` (foobar, projected — rename freely).
 **Reference implementation for the UI spine:** `/mnt/nvme2/build/htrk3` (DESIGN §UI strategy).
 **Target library:** `~/Music` → `/mnt/md0/mp3`: **115,577 files**, 99,329 mp3, 671 opus, 1,654 m3u,
 363 cue, 5,471 cover images. Every budget below is set against that number.
 
-**Landed:** P0 the audio path · P1a the index (schema, incremental scanner, tags, FTS) · P1b the
-layout engine, five panels, half-block cover art and headless PNG shots. P1c is MCP, playlist
-files/cue sheets, and panels bound to saved views.
+**Landed:** P0 the audio path · P1a the index · P1b the layout engine, panels, half-block cover art and headless PNG shots · P2a journalled tag writing and the Properties panel. P1c is MCP, playlist files/cue sheets, and panels bound to saved views — tracked as a checklist in [BACKLOG.md](BACKLOG.md).
 
 **Decided (draft 2):**
 - **Linux only.** cpal stays portable as a side effect; macOS/Windows are untested, not targets.
@@ -389,9 +387,14 @@ fuzzy matcher only earns its place for in-view filtering, which is P1c. Cover ar
 (`albumartist \x1f album`) rather than by content hash: it is fetched lazily per album, so the album
 key *is* the dedupe, and the content hash buys nothing until art is written back (P2).
 
-**P2 — library management (the weight centre).** Tag write; file ops (move/rename/organize, dry-run,
-undo journal); missing-file relocate; duplicate finder; query language + autoplaylists; ReplayGain
-scan/write; tag⇄filename guessing; art write; Properties panel; playlist export.
+**P2a — tag writing, journalled (landed 2026-10-29).** `fbp-core::tag::{Field, Patch}` (a patch, not a tag: a field nobody edited is never written), the writer in `fbp-index/src/tags.rs`, the undo journal (schema v4, one row per gesture, written **before** the first file is touched), and the Properties panel with inline editing.
+
+*How it is safe:* every file is copied to a temp file beside it, edited, fsynced and renamed over the original — a kill at any point leaves the old file or the new one, never half of either. A read-only directory, a bad number or a refused confirmation leaves the bytes untouched. The index row is updated in the same handler (so FTS shows the edit immediately), and undo restores both the file and the row. The price of atomic writes is a rewrite per file; in-place writing with ID3v2 padding would be faster and would lose files on a power cut, so it stays a fallback, not the default.
+
+*Evidence:* 8 writer tests in `fbp-index/tests/tags.rs` (mp3 and flac round-trip through their own tag formats; multi-file is one undo entry; undo walks back gesture by gesture; clearing removes; a bad number is refused before any file is touched; a failed write leaves the original bytes and no temp files) and 3 UI tests that push real keys through the panel and assert on the file on disk — commit, Esc, and apply-to-all refusing on `n` / writing on `y`, with one undo per gesture.
+
+*Deviations recorded:* the panel edits one track at a time and `A` applies the last edited field to every filtered track behind a y/N confirmation (a multi-select model is P2c); the `fbp tag set` CLI verb belongs with dry-run, i.e. P2b; the journal lives in the database, so the TUI and the CLI share one undo history instead of two.
+**P2b — file operations.** Move/rename/organize by pattern with a dry-run preview and the same journal; missing-file relocate; duplicate finder; `fbp tag set` with `--dry-run`; query language + autoplaylists; ReplayGain scan/write; tag⇄filename guessing; art write; playlist export.
 *Accept:* a multi-file tag edit is **one** undo entry and survives a kill mid-write (temp+rename, no
 partial file); a 500-file rename+move batch is fully undone by one action; relocate finds a moved album
 by filename+size+duration with no false positives in the fixture set; a 20-case query corpus round-trips

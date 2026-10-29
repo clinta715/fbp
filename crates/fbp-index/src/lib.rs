@@ -15,6 +15,7 @@ mod art;
 mod query;
 mod scan;
 mod schema;
+mod tags;
 
 use std::path::{Path, PathBuf};
 
@@ -23,12 +24,14 @@ use rusqlite::Connection;
 pub use art::{album_key, Art};
 pub use query::{AlbumRow, Row, Search, Sort, Stats};
 pub use scan::{ScanOptions, ScanProgress, ScanReport};
+pub use tags::WriteReport;
 
 #[derive(Debug)]
 pub enum Error {
     Sql(rusqlite::Error),
     Io(std::io::Error),
     Art(String),
+    Tag(String),
 }
 
 impl std::fmt::Display for Error {
@@ -37,6 +40,7 @@ impl std::fmt::Display for Error {
             Error::Sql(e) => write!(f, "database: {e}"),
             Error::Io(e) => write!(f, "io: {e}"),
             Error::Art(e) => write!(f, "art: {e}"),
+            Error::Tag(e) => write!(f, "tag: {e}"),
         }
     }
 }
@@ -181,6 +185,29 @@ impl Library {
             .conn
             .query_row("SELECT COUNT(*) FROM art", [], |row| row.get::<_, i64>(0))?
             as usize)
+    }
+
+    /// Write tags to files, journalled and atomic (see `tags.rs`). One call is one undo entry.
+    pub fn write_tags(
+        &self,
+        paths: &[std::path::PathBuf],
+        patch: &fbp_core::tag::Patch,
+    ) -> Result<WriteReport> {
+        tags::write_tags(self, paths, patch)
+    }
+
+    /// Put the most recent journalled edit back, files included.
+    pub fn undo_last(&self) -> Result<WriteReport> {
+        tags::undo_last(self)
+    }
+
+    /// How many gestures can still be undone.
+    pub fn undo_depth(&self) -> Result<usize> {
+        tags::undo_depth(&self.conn)
+    }
+
+    pub(crate) fn connection(&self) -> &rusqlite::Connection {
+        &self.conn
     }
 
     pub fn count(&self) -> Result<usize> {

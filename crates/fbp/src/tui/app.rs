@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use fbp_core::tag::{Field, Patch};
 use fbp_core::Track;
 use fbp_index::{AlbumRow, Library, Row, ScanOptions, ScanProgress, ScanReport, Search, Sort};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -25,6 +26,14 @@ use super::theme::Theme;
 use crate::config::{self, Config};
 
 const LOG_LINES: usize = 200;
+
+/// A destructive edit waiting for a y/N: applying one value to every filtered track is a
+/// single keystroke away from being a single keystroke too many.
+struct Pending {
+    patch: Patch,
+    paths: Vec<PathBuf>,
+    label: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Session {
@@ -57,6 +66,13 @@ pub struct App {
     pub artist_sel: usize,
     pub albums: Arc<Vec<AlbumRow>>,
     pub album_sel: usize,
+
+    /// Which tag field the Properties panel has selected, and the buffer being typed.
+    pub props_sel: usize,
+    pub props_editing: Option<(Field, String)>,
+    last_edit: Option<(Field, String)>,
+    pending: Option<Pending>,
+    pub undo_depth: usize,
 
     pub art: ArtCache,
     pub playback: Playback,
@@ -106,6 +122,11 @@ impl App {
             artist_sel: 0,
             albums: Arc::new(Vec::new()),
             album_sel: 0,
+            props_sel: 0,
+            props_editing: None,
+            last_edit: None,
+            pending: None,
+            undo_depth: 0,
             playback: Playback::new(config.volume),
             queue_ids: Vec::new(),
             playing_id: None,
@@ -247,18 +268,41 @@ impl App {
         }
     }
 
-    /// Switch the first tab stack to `index` (0 = tracks, 1 = albums).
+    /// A capture must not depend on the session the last run left behind: it renders the
+    /// configured layout, unfiltered, from the top. (Found the hard way: two shots came out
+    /// byte-identical because the restored session had one tab stack instead of two.)
     #[cfg(feature = "shots")]
-    pub fn set_tab(&mut self, index: usize) {
-        fn find(node: &mut Node) -> Option<&mut usize> {
-            match node {
-                Node::Tabs { active, .. } => Some(active),
-                Node::Split { children, .. } => children.iter_mut().find_map(find),
-                Node::Panel { .. } => None,
-            }
+    pub fn reset_for_capture(&mut self) {
+        self.layout = self
+            .config
+            .load_layout(&self.config.layout)
+            .unwrap_or_else(Node::default_layout);
+        self.focus = 0;
+        self.filter.clear();
+        self.filter_editing = false;
+        self.layout_mode = false;
+        self.albums = Arc::new(self.library.albums().unwrap_or_default());
+        self.reload_rows();
+    }
+
+    /// Put the focus on the properties panel, whichever tab it is behind.
+    #[cfg(feature = "shots")]
+    pub fn focus_properties(&mut self) {
+        if let Some(index) = self
+            .layout
+            .leaves()
+            .iter()
+            .position(|kind| *kind == PanelKind::Properties)
+        {
+            self.focus = index;
         }
-        if let Some(active) = find(&mut self.layout) {
-            *active = index;
+    }
+
+    /// Show a given tab in the nth tab stack (used by the shot path).
+    #[cfg(feature = "shots")]
+    pub fn set_tabs(&mut self, nth: usize, active: usize) {
+        if let Some(slot) = nth_tabs(&mut self.layout, nth) {
+            *slot = active;
             self.redraw = true;
         }
     }
@@ -326,6 +370,21 @@ impl App {
     // ---- keys -----------------------------------------------------------------
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.pending.is_some() {
+            match key.code {
+                KeyCode::Char('y') => self.confirm_pending(),
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.pending = None;
+                    self.log("cancelled");
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.props_editing.is_some() {
+            self.handle_props_edit_key(key);
+            return;
+        }
         if self.filter_editing {
             self.handle_filter_key(key);
             return;
@@ -391,9 +450,12 @@ impl App {
             }
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.start_scan(),
-            KeyCode::Char('m') => self.toggle_tab(),
+            KeyCode::Char('m') => self.toggle_tab_nth(0),
+            KeyCode::Char('M') => self.toggle_tab_nth(1),
+            KeyCode::Char('u') => self.undo(),
+            KeyCode::Char('A') => self.apply_to_all(),
             KeyCode::Char('?') => self.log(
-                "keys: / filter  Tab focus  jk move  Enter play  space pause  np next/prev  +- vol  s sort  S scan  m table/albums  Ctrl+L layout  Ctrl+S save layout  Alt+1..9 slot  q quit",
+                "keys: / filter  Tab focus  jk move  Enter play (or edit a tag field)  space pause  n/p next/prev  +/- vol  s sort  S scan  m/M tab stacks  A apply field to all filtered  u undo  Ctrl+L layout  Ctrl+S save layout  Alt+1..9 slot  q quit",
             ),
             KeyCode::Enter => self.activate(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -435,6 +497,128 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Typing in the Properties panel. Enter commits through the journalled writer; Esc
+    /// throws the buffer away, because a tag editor that saves on blur is a tag editor that
+    /// loses data.
+    fn handle_props_edit_key(&mut self, key: KeyEvent) {
+        let Some((field, mut buffer)) = self.props_editing.take() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => self.commit_field(field, buffer),
+            KeyCode::Esc => self.log("tag edit cancelled"),
+            KeyCode::Backspace => {
+                buffer.pop();
+                self.props_editing = Some((field, buffer));
+            }
+            KeyCode::Char(c) => {
+                buffer.push(c);
+                self.props_editing = Some((field, buffer));
+            }
+            _ => self.props_editing = Some((field, buffer)),
+        }
+    }
+
+    fn commit_field(&mut self, field: Field, value: String) {
+        let Some(row) = self.rows.get(self.row_sel).cloned() else {
+            return;
+        };
+        let patch = Patch::new().set(field, value.clone());
+        let path = row.path_buf();
+        match self.library.write_tags(std::slice::from_ref(&path), &patch) {
+            Ok(report) if report.is_ok() => {
+                self.last_edit = Some((field, value.clone()));
+                self.log(format!(
+                    "{} = {:?}: {}",
+                    field.label(),
+                    value,
+                    report.summary("wrote")
+                ));
+                self.reload_all();
+            }
+            Ok(report) => {
+                let first = report
+                    .failed
+                    .first()
+                    .map(|(_, error)| error.clone())
+                    .unwrap_or_default();
+                self.log(format!("{}: {first}", report.summary("tag write failed")));
+            }
+            Err(error) => self.log(format!("tag write failed: {error}")),
+        }
+        self.refresh_undo();
+    }
+
+    /// Apply the last edited value to every track the table is showing -- the multi-file edit,
+    /// behind a confirmation.
+    fn apply_to_all(&mut self) {
+        let Some((field, value)) = self.last_edit.clone() else {
+            self.log("edit a field first, then A applies it to the filtered tracks");
+            return;
+        };
+        let paths: Vec<PathBuf> = self.rows.iter().map(|row| row.path_buf()).collect();
+        if paths.is_empty() {
+            return;
+        }
+        let patch = Patch::new().set(field, value.clone());
+        let label = format!("{}={value:?} on {} tracks", field.key(), paths.len());
+        self.log(format!("apply {label}? y/N"));
+        self.pending = Some(Pending {
+            patch,
+            paths,
+            label,
+        });
+    }
+
+    fn confirm_pending(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        match self.library.write_tags(&pending.paths, &pending.patch) {
+            Ok(report) if report.is_ok() => {
+                self.log(format!("{}: {}", pending.label, report.summary("wrote")));
+                self.reload_all();
+            }
+            Ok(report) => {
+                let first = report
+                    .failed
+                    .first()
+                    .map(|(path, error)| format!("{}: {error}", path.display()))
+                    .unwrap_or_default();
+                self.log(format!(
+                    "{}; first failure {first}",
+                    report.summary("tag write")
+                ));
+            }
+            Err(error) => self.log(format!("tag write failed: {error}")),
+        }
+        self.refresh_undo();
+    }
+
+    fn undo(&mut self) {
+        if self.undo_depth == 0 {
+            self.log("nothing to undo");
+            return;
+        }
+        match self.library.undo_last() {
+            Ok(report) if report.is_ok() => {
+                self.log(report.summary("undid"));
+                self.reload_all();
+            }
+            Ok(report) => self.log(format!(
+                "{}; some files could not be restored",
+                report.summary("undo")
+            )),
+            Err(error) => self.log(format!("undo failed: {error}")),
+        }
+        self.refresh_undo();
+    }
+
+    fn refresh_undo(&mut self) {
+        self.undo_depth = self.library.undo_depth().unwrap_or(0);
+        self.redraw = true;
     }
 
     fn handle_layout_key(&mut self, key: KeyEvent) {
@@ -511,6 +695,10 @@ impl App {
                         (self.album_sel as i32 + delta).clamp(0, len as i32 - 1) as usize;
                 }
             }
+            PanelKind::Properties => {
+                let len = Field::ALL.len();
+                self.props_sel = (self.props_sel as i32 + delta).clamp(0, len as i32 - 1) as usize;
+            }
             PanelKind::Tree => {
                 let len = self.artists.len();
                 if len > 0 {
@@ -537,6 +725,19 @@ impl App {
         match self.focused() {
             PanelKind::Table => self.play_from_selection(),
             PanelKind::Albums => self.play_album(),
+            PanelKind::Properties => {
+                let field = Field::ALL[self.props_sel.min(Field::ALL.len() - 1)];
+                let current = self
+                    .rows
+                    .get(self.row_sel)
+                    .and_then(|row| row.field(field))
+                    .unwrap_or_default();
+                self.log(format!(
+                    "editing {} (Enter commits, Esc cancels)",
+                    field.label()
+                ));
+                self.props_editing = Some((field, current));
+            }
             PanelKind::Tree => {
                 if self.artist_sel == 0 {
                     self.filter.clear();
@@ -577,16 +778,9 @@ impl App {
         self.log(format!("sorted by {}", self.sort.label()));
     }
 
-    /// Switch the tab stack (table <-> albums) wherever it is in the layout.
-    fn toggle_tab(&mut self) {
-        fn find(node: &mut Node) -> Option<&mut usize> {
-            match node {
-                Node::Tabs { active, .. } => Some(active),
-                Node::Split { children, .. } => children.iter_mut().find_map(find),
-                Node::Panel { .. } => None,
-            }
-        }
-        if let Some(active) = find(&mut self.layout) {
+    /// Switch the nth tab stack (0 = tracks/albums, 1 = now playing/properties).
+    fn toggle_tab_nth(&mut self, nth: usize) {
+        if let Some(active) = nth_tabs(&mut self.layout, nth) {
             *active = 1 - *active;
             self.redraw = true;
         }
@@ -730,18 +924,35 @@ impl App {
         } else {
             format!("  filter \"{}\"", self.filter)
         };
-        let mode = if self.layout_mode { "  LAYOUT" } else { "" };
-        let hints = "  / filter  Tab focus  Enter play  space pause  m tab  Ctrl+L layout  q quit";
+        let pending = match &self.pending {
+            Some(pending) => format!("  APPLY {}? y/N", pending.label),
+            None => String::new(),
+        };
+        let undo = if self.undo_depth > 0 {
+            format!("  undo:{}", self.undo_depth)
+        } else {
+            String::new()
+        };
+        let mode = if self.layout_mode {
+            "  LAYOUT".to_string()
+        } else if self.props_editing.is_some() {
+            "  EDITING TAG".to_string()
+        } else {
+            String::new()
+        };
+        let hints = "  / filter  Tab focus  Enter play  space pause  m/M tab  u undo  Ctrl+L layout  q quit";
         let line = Line::from(vec![
             Span::styled(
                 format!(
-                    " {}/{} {}{}{}{} ",
+                    " {}/{} {}{}{}{}{}{} ",
                     self.row_sel + 1,
                     self.rows.len(),
                     playing,
                     filter,
                     scan,
-                    mode
+                    undo,
+                    mode,
+                    pending
                 ),
                 Style::default().fg(self.theme.bg).bg(self.theme.accent),
             ),
@@ -752,6 +963,28 @@ impl App {
             area,
         );
     }
+}
+
+/// The active index of the nth tab stack, in draw order.
+fn nth_tabs(node: &mut Node, nth: usize) -> Option<&mut usize> {
+    fn find<'a>(node: &'a mut Node, nth: usize, seen: &mut usize) -> Option<&'a mut usize> {
+        match node {
+            Node::Tabs { active, .. } => {
+                if *seen == nth {
+                    Some(active)
+                } else {
+                    *seen += 1;
+                    None
+                }
+            }
+            Node::Split { children, .. } => {
+                children.iter_mut().find_map(|child| find(child, nth, seen))
+            }
+            Node::Panel { .. } => None,
+        }
+    }
+    let mut seen = 0;
+    find(node, nth, &mut seen)
 }
 
 fn read_session() -> Session {
@@ -800,6 +1033,10 @@ fn first_panel(node: &Node) -> PanelKind {
             .unwrap_or(PanelKind::Table),
     }
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
 
 fn clock(ms: u64) -> String {
     format!("{}:{:02}", ms / 60_000, (ms / 1_000) % 60)

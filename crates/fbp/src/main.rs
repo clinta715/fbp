@@ -40,9 +40,9 @@ OPTIONS:
     -h, --help              this
 
 KEYS:
-    /  filter      Tab  focus      Enter  play      space  pause/play
-    n/p  next/prev  s  sort     S  scan    m  tracks/albums
-    Ctrl+L  layout mode      Ctrl+S  save layout    Alt+1..9  load slot     q  quit
+    /  filter      Tab  focus     Enter  play / edit a tag field     space  pause/play
+    n/p  next/prev  s  sort    S  scan    m M  tab stacks    u  undo    A  apply to filtered
+    Ctrl+L  layout mode      Ctrl+S  save layout     Alt+1..9  load slot     q  quit
 ";
 
 #[derive(Debug)]

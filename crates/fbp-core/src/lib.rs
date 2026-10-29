@@ -5,6 +5,8 @@
 //! where they land so the audio and index layers never grow their own notions of
 //! what a track is.
 
+pub mod tag;
+
 use std::path::{Path, PathBuf};
 
 /// A file the player can be pointed at.

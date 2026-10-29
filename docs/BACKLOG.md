@@ -25,9 +25,12 @@ the plan. Nothing here is forgotten, only deferred.
 
 ## P2 — library management (the weight centre), in slices
 
-- [ ] **P2a tag write** (in progress): multi-file, atomic temp+rename, journal-before-write, undo,
-      Properties panel.
-- [ ] **P2b file ops**: rename/move/organize by pattern with dry-run preview and an undo journal.
+- [x] **P2a tag write** (landed 2026-10-29): patch-based multi-file writing, atomic temp+rename,
+      journal-before-write, undo, the Properties panel with inline editing and apply-to-all.
+      *Still owed from this slice:* a multi-select model (today: one track + "apply to filtered"),
+      and an in-place writer with ID3v2 padding as the fast path.
+- [ ] **P2b file ops**: rename/move/organize by pattern with dry-run preview, sharing the P2a
+      journal; plus `fbp tag set --dry-run` on the CLI (the scriptable half of P2a).
 - [ ] **P2c repair & query**: missing-file relocate (filename+size+duration), duplicate finder,
       query language subset, autoplaylists.
 - [ ] **P2d totals**: ReplayGain scan + tag write, tag⇄filename guessing, art write/extract,

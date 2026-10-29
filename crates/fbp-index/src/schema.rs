@@ -6,7 +6,7 @@
 
 use rusqlite::Connection;
 
-pub const VERSION: i64 = 3;
+pub const VERSION: i64 = 4;
 
 const V1: &str = r#"
 CREATE TABLE tracks (
@@ -89,6 +89,16 @@ CREATE TABLE art (
     thumb     BLOB NOT NULL,
     at        INTEGER NOT NULL
 );
+
+-- The undo journal: written *before* a file is touched, so a crash mid-batch can still be
+-- undone. One row per gesture (a 500-file tag edit is one row), payload is JSON.
+CREATE TABLE undo (
+    id      INTEGER PRIMARY KEY,
+    at      INTEGER NOT NULL,
+    kind    TEXT NOT NULL,
+    label   TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 "#;
 
 /// Create or upgrade the database, and set the pragmas a scanning writer wants.
@@ -138,6 +148,22 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                     height    INTEGER NOT NULL,
                     thumb     BLOB NOT NULL,
                     at        INTEGER NOT NULL
+                );",
+            )?;
+            conn.execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                [VERSION.to_string()],
+            )?;
+        }
+        Some(3) => {
+            // v4: the undo journal.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS undo (
+                    id      INTEGER PRIMARY KEY,
+                    at      INTEGER NOT NULL,
+                    kind    TEXT NOT NULL,
+                    label   TEXT NOT NULL,
+                    payload TEXT NOT NULL
                 );",
             )?;
             conn.execute(

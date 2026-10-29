@@ -54,6 +54,7 @@ impl Shot {
 /// and a screenshot taken immediately would show placeholders.
 pub fn capture_all(app: &mut App, dir: &Path) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    app.reset_for_capture();
     app.preload_art(16);
     let mut written = Vec::new();
 
@@ -64,13 +65,21 @@ pub fn capture_all(app: &mut App, dir: &Path) -> Result<Vec<PathBuf>, String> {
     }
 
     // The albums tab, which is where the half-block cover art lives.
-    app.set_tab(1);
+    app.set_tabs(0, 1);
     for shot in Shot::SIZES {
         let path = dir.join(format!("albums-{}", shot.file_name()));
         capture(app, &shot, &path)?;
         written.push(path);
     }
-    app.set_tab(0);
+    app.set_tabs(0, 0);
+
+    // The properties tab: the tag editor.
+    app.set_tabs(1, 1);
+    app.focus_properties();
+    let path = dir.join("properties-200x60.png");
+    capture(app, &Shot::SIZES[1], &path)?;
+    written.push(path);
+    app.set_tabs(1, 0);
     Ok(written)
 }
 
@@ -272,7 +281,7 @@ mod tests {
         )
         .expect("app");
         assert!(!app.albums.is_empty(), "the fixture library has albums");
-        app.set_tab(1);
+        app.set_tabs(0, 1);
         app.preload_art(4);
 
         let path = root.join("albums.png");
@@ -295,6 +304,57 @@ mod tests {
         assert!(
             colors > 200,
             "cover art should produce many colours, got {colors}"
+        );
+    }
+
+    /// Switching the tab stack must change the frame: a capture that ignores the tab would
+    /// make the album wall indistinguishable from the table.
+    #[test]
+    fn the_tab_stack_changes_what_is_captured() {
+        use crate::config::Config;
+
+        let root = std::env::temp_dir().join(format!("fbp-shot-tabs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp dir");
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fbp-index/fixtures");
+        for name in ["a1.mp3", "a2.mp3", "cover.jpg"] {
+            std::fs::copy(fixtures.join(name), root.join(name)).expect("copy fixture");
+        }
+        let db = root.join("library.db");
+        let mut library = fbp_index::Library::open(&db).expect("library");
+        library
+            .scan(
+                &root,
+                fbp_index::ScanOptions::default(),
+                &fbp_index::ScanProgress::new(),
+            )
+            .expect("scan");
+        drop(library);
+
+        let mut app = App::open(db, Config::default(), None, false).expect("app");
+        app.layout = crate::tui::layout::Node::default_layout();
+        app.preload_art(4);
+
+        let shot = Shot {
+            cols: 100,
+            rows: 30,
+            scale: 1,
+        };
+        let table = root.join("table.png");
+        capture(&mut app, &shot, &table).expect("table");
+        app.set_tabs(0, 1);
+        let albums = root.join("albums.png");
+        capture(&mut app, &shot, &albums).expect("albums");
+
+        let table_bytes = std::fs::read(&table).expect("read");
+        let album_bytes = std::fs::read(&albums).expect("read");
+        assert_ne!(
+            table_bytes, album_bytes,
+            "the albums tab must render differently"
+        );
+        assert!(
+            !app.albums.is_empty(),
+            "the fixture library has albums to draw"
         );
     }
 

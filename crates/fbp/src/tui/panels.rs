@@ -22,6 +22,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, kind: PanelKind, area: Rect, focus
         PanelKind::Table => draw_table(frame, app, area, focused),
         PanelKind::Albums => draw_albums(frame, app, area, focused),
         PanelKind::NowPlaying => draw_now_playing(frame, app, area, focused),
+        PanelKind::Properties => draw_properties(frame, app, area, focused),
         PanelKind::Console => draw_console(frame, app, area, focused),
     }
 }
@@ -313,6 +314,64 @@ fn draw_album_tile(
             height: 3,
         },
     );
+}
+
+// ---- properties -------------------------------------------------------------------
+
+/// The tag editor: one row per field, the selected row editable in place. It does not write
+/// anything itself -- Enter hands the patch to `App::commit_field`, which goes through the
+/// journalled writer, so an edit here is one undo away like every other write.
+fn draw_properties(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    let block = panel_block(app, PanelKind::Properties, focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(row) = app.rows.get(app.row_sel).cloned() else {
+        frame.render_widget(
+            Paragraph::new("select a track to edit its tags").style(app.theme.dim_style()),
+            inner,
+        );
+        return;
+    };
+
+    if inner.width < 12 || inner.height < 3 {
+        return;
+    }
+    let label_width = 13.min(inner.width as usize / 2);
+    let value_width = (inner.width as usize).saturating_sub(label_width + 1);
+    let mut lines = Vec::with_capacity(fbp_core::tag::Field::ALL.len());
+
+    for (index, field) in fbp_core::tag::Field::ALL.iter().enumerate() {
+        let selected = index == app.props_sel;
+        let editing = app.props_editing.as_ref().is_some_and(|(f, _)| f == field);
+        let value =
+            if let Some((_, buffer)) = app.props_editing.as_ref().filter(|(f, _)| f == field) {
+                format!("{buffer}\u{2588}")
+            } else {
+                row.field(*field).unwrap_or_else(|| "\u{2014}".to_string())
+            };
+        let style = if editing {
+            Style::default()
+                .fg(app.theme.selection_fg)
+                .bg(app.theme.selection_bg)
+        } else if selected {
+            app.theme.selection_style(focused)
+        } else {
+            app.theme.text_style()
+        };
+        let label_style = if selected {
+            style
+        } else {
+            app.theme.dim_style()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(pad(field.label(), label_width), label_style),
+            Span::styled(" ", app.theme.dim_style()),
+            Span::styled(pad(&value, value_width), style),
+        ]));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 // ---- now playing ------------------------------------------------------------------
