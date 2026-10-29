@@ -382,7 +382,8 @@ also builds and renders with `--no-default-features` (no audio stack at all), wh
 `--shots` usable in CI.
 
 **Moved out of P1b into P1c:** MCP, m3u/cue import, playback stats (play counts/ratings UI), and
-panels bound to saved views. Also deferred, with the reason recorded: the quick filter uses FTS5
+panels bound to saved views — tracked as a checklist in [BACKLOG.md](BACKLOG.md) so it cannot quietly
+disappear. Also deferred, with the reason recorded: the quick filter uses FTS5
 (3–18 ms in-process) rather than `nucleo` — it meets the keystroke budget on the real library, so the
 fuzzy matcher only earns its place for in-view filtering, which is P1c. Cover art is keyed by album
 (`albumartist \x1f album`) rather than by content hash: it is fetched lazily per album, so the album
